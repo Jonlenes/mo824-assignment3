@@ -78,7 +78,6 @@ def check_2tsp_valid_solution(num_vertices, tours, edges):
     """
     Verfica se solução fornecida é valida
     """
-    # import pdb; pdb.set_trace()
     # Verifica se todos os vertices foram utilizados
     assert not any([len(tour) != num_vertices for tour in tours])
         
@@ -157,26 +156,26 @@ def main(ins_folder):
             optimal_tours.append(tours)
             selected_edges.append(edges)
 
-            results = results.append(
-                {
-                    "n_vertices": instance[0],
+        results = results.append(
+            {
+                "n_vertices": instance[0],
 
-                    "lim_inf_lag": 0,
-                    "lim_sup_lag": 0,
-                    "time_lag": round(times[0], 3),
-                    "cost_lag": costs[0],
-                    "optimal_tour_lag": optimal_tours[0],
-                    "edges_lag": selected_edges[0],
+                "lim_inf_lag": 0,
+                "lim_sup_lag": 0,
+                "time_lag": round(times[0], 3),
+                "cost_lag": costs[0],
+                "optimal_tour_lag": optimal_tours[0],
+                "edges_lag": selected_edges[0],
 
-                    "lim_inf_int": 0,
-                    "lim_sup_int": 0,
-                    "time_int": round(times[0], 3),
-                    "cost_int": costs[0],
-                    "optimal_tour_int": optimal_tours[0],
-                    "edges_int": selected_edges[0]
-                },
-                ignore_index=True,
-            )
+                "lim_inf_int": 0,
+                "lim_sup_int": 0,
+                "time_int": round(times[0], 3),
+                "cost_int": costs[0],
+                "optimal_tour_int": optimal_tours[0],
+                "edges_int": selected_edges[0]
+            },
+            ignore_index=True,
+        )
 
     results.to_csv("data/results.csv", index=False)
 
