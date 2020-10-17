@@ -2,15 +2,17 @@ import numpy as np
 np.set_printoptions(precision=2, suppress= True)
 
 
-def generic_subgradient(func_get_Z_lb, Z_ub, func_pi, u=[0, 0, 0], n_iter=10, early_stop=5, atol=1e-08, verbose=True):
+def generic_subgradient(func_get_Z_lb, func_compute_subgradient, func_pi, Z_ub, u=[0, 0, 0], n_iter=10, early_stop=5, atol=1e-08, verbose=True):
     """
     Parameters:
         func_get_Z_lb: func
             function that receive the lagrange multiplier and return the lower bound
-        Z_ub: float
-            model upper bound
+        func_compute_subgradient: func
+            function that return the subgradients
         func_pi: func
             function that receive the iteration and return the current value of constant PI
+        Z_ub: float
+            model upper bound
         u: list or ndarray
             initial value for lagrange multipliers
         n_iter: int
@@ -42,9 +44,7 @@ def generic_subgradient(func_get_Z_lb, Z_ub, func_pi, u=[0, 0, 0], n_iter=10, ea
             print('Optimal value found.')
             return 0
 
-        x_vals = model.getAttr("x", model.getVars())
-        g = np.array([1 - sum(A[i, ] * x_vals) for i in range(len(A))])
-        
+        g = func_compute_subgradient()
         # Termination criteria (5): all subgradient is zero
         if all([np.isclose(g_i, 0, atol=atol) for g_i in g]):
             print('Optimal value found.')
@@ -56,11 +56,10 @@ def generic_subgradient(func_get_Z_lb, Z_ub, func_pi, u=[0, 0, 0], n_iter=10, ea
         u[u < 0] = 0
         
         if verbose:
-            print('iteration:', k, ', Z_lb:', round(Z_lb, 2), ', u:', np.array(u), ', x:', np.array(x_vals))
+            print('iteration:', k, ', Z_lb:', round(Z_lb, 2), ', u:', np.array(u))
    
     print('Stopping because of Maximum number of iterations reached.')
     return 1
-
 # Exemplo func_pi com valor fixo:
 # func_pi = lambda k: 0.1
 # Exemplo func_pi decrescendo em 1%
