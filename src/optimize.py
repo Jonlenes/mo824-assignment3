@@ -141,6 +141,85 @@ def build_2tsp_model(num_vertices, dist):
     )
 
 
+def lag_heuristic_2tps(model, num_vertices, dist):
+    """
+    Lagrangian heuristic: takes the LLB2TPS solution and transforms it into a valid 2TPS
+    solution by swapping the edges. This will be a upper bound for 2TPS
+    """
+    edges_variables = model._edges_variables
+    x = model.getAttr("X", edges_variables[0])
+    y = model.getAttr("X", edges_variables[1])
+    edges = edges_variables[0].keys()
+
+    for u1, v1 in edges:
+        # Verifica se a restrição foi violada
+        if x[u1, v1] + y[u1, v1] <= 1:
+            continue
+        # Busca outra aresta que pode ser trocada com essa
+        for u2, v2 in edges:
+            # Verifica se tem algum vertice em comum
+            if len(set([u1, v1, u2, v2])) != 4:
+                continue
+            # Tenta fazer a troca de aresta, verificando se nenhum subciclo foi gerado
+            success, used_edges = try_swap_edges(x, y, num_vertices, edges, u1, v1, u2, v2)
+            if success:
+                x = used_edges
+                break
+
+    # Sanity check: verifica se a heurística encontrou uma solução valida
+    tours, edges = get_optimal_tour([x, y], num_vertices)
+    check_2tsp_valid_solution(num_vertices, tours, edges)
+
+    # Computa o custo da solução heurística
+    cost = sum((x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys())
+
+    return cost
+
+
+def solve_llb2tsp(model, dist, num_vertices, u):
+    """
+    Given a vector, u (Lagrange multipliers), solve the LLB2TPS and return the value
+    of the objective function (which will be the lower bound for the for 2TPS)
+    """
+    x_edges = model._edges_variables[0]
+    y_edges = model._edges_variables[1]
+
+    # Set objective
+    model.setObjective(
+        gp.quicksum(
+            x_edges[i, j] * dist[i, j] + y_edges[i, j] * dist[i, j]
+            for i, j in dist.keys()
+        )
+        + gp.quicksum(
+            u[index] * (-1 + (x_edges[i, j] + y_edges[i, j]))
+            for index, (i, j) in enumerate(x_edges.keys())
+        ),
+        GRB.MINIMIZE,
+    )
+
+    model.optimize(
+        lambda model, where: eliminate_subtour_solution(num_vertices, model, where)
+    )
+
+    return model.ObjVal
+
+
+def compute_subgradient(model):
+    """
+    Computes the subgradients considering the current solution provided by LLB2TPS.
+    This is done using the dualized constraint as follows: b - Ax.
+    """
+    edges_variables = model._edges_variables
+    x_edges_values = model.getAttr("X", edges_variables[0])
+    y_edges_values = model.getAttr("X", edges_variables[1])
+    return np.array(
+        [
+            -1 + (x_edges_values[i, j] + y_edges_values[i, j])
+            for i, j in model._edges_variables[0].keys()
+        ]
+    )
+
+
 def build_llb2tsp_model(num_vertices, dist):
     """
     Build the llb2tsp model
@@ -159,6 +238,7 @@ def build_llb2tsp_model(num_vertices, dist):
     for i, j in x_edges.keys():
         x_edges[j, i] = x_edges[i, j]  # edge in opposite direction
         y_edges[j, i] = y_edges[i, j]  # edge in opposite direction
+    
     # Constraints
     #   Add degree-2 constraint
     model.addConstrs(x_edges.sum(i, "*") == 2 for i in range(num_vertices))
@@ -167,80 +247,7 @@ def build_llb2tsp_model(num_vertices, dist):
     model._edges_variables = [x_edges, y_edges]
     model.Params.lazyConstraints = 1
 
-    def func_Z_lb(u):
-        """
-        Given a vector, u (Lagrange multipliers), solve the LLB2TPS and return the value
-        of the objective function (which will be the lower bound for the for 2TPS)
-        """
-        # Set objective
-        model.setObjective(
-            gp.quicksum(
-                x_edges[i, j] * dist[i, j] + y_edges[i, j] * dist[i, j]
-                for i, j in dist.keys()
-            )
-            + gp.quicksum(
-                u[index] * (-1 + (x_edges[i, j] + y_edges[i, j]))
-                for index, (i, j) in enumerate(x_edges.keys())
-            ),
-            GRB.MINIMIZE,
-        )
-
-        model.optimize(
-            lambda model, where: eliminate_subtour_solution(num_vertices, model, where)
-        )
-
-        return model.ObjVal
-
-    def func_Z_ub():
-        """
-        Lagrangian heuristic: takes the LLB2TPS solution and transforms it into a valid 2TPS
-        solution by swapping the edges. This will be a upper bound for 2TPS
-        """
-        edges_variables = model._edges_variables
-        x = model.getAttr("X", edges_variables[0])
-        y = model.getAttr("X", edges_variables[1])
-        edges = x_edges.keys()
-
-        for u1, v1 in edges:
-            # Verifica se a restrição foi violada
-            if x[u1, v1] + y[u1, v1] <= 1:
-                continue
-            # Busca outra aresta que pode ser trocada com essa
-            for u2, v2 in edges:
-                # Verifica se tem algum vertice em comum
-                if len(set([u1, v1, u2, v2])) != 4:
-                    continue
-                # Tenta fazer a troca de aresta, verificando se nenhum subciclo foi gerado
-                success, used_edges = try_swap_edges(x, y, num_vertices, edges, u1, v1, u2, v2)
-                if success:
-                    x = used_edges
-                    break
-        
-        # Sanity check: verifica se a heurística encontrou uma solução valida
-        tours, edges = get_optimal_tour([x, y], num_vertices)
-        check_2tsp_valid_solution(num_vertices, tours, edges)
-
-        # Computa o custo da solução heurística
-        cost = sum((x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys())
-
-        return cost
-
-    def func_compute_subgradient():
-        """
-        Computes the subgradients considering the current solution provided by LLB2TPS. 
-        This is done using the dualized constraint as follows: b - Ax.
-        """
-        edges_variables = model._edges_variables
-        x_edges_values = model.getAttr("X", edges_variables[0])
-        y_edges_values = model.getAttr("X", edges_variables[1])
-        return np.array(
-            [
-                -1 + (x_edges_values[i, j] + y_edges_values[i, j])
-                for i, j in x_edges.keys()
-            ]
-        )
-
-    return model, func_Z_lb, func_Z_ub, func_compute_subgradient
+    return model
 
 
 def main(ins_folder):
@@ -252,7 +259,7 @@ def main(ins_folder):
     # If True, will optimize the 2TSP (with ILP)
     run_2tps_ilp = True
     # Choose: {0, 1, 2, 3, 4}
-    instance_id = 2
+    instance_id = 0
 
     # Load instance
     num_vertices, _, dist = load_instance(f"{ins_folder}/instancia-{instance_id}.json")
@@ -261,16 +268,18 @@ def main(ins_folder):
     # Begin: LLB2TPS
     if run_llb2tps:
         # Building the model
-        model, func_Z_lb, func_Z_ub, func_compute_subgradient = build_llb2tsp_model(
-            num_vertices, dist
-        )
+        model = build_llb2tsp_model(num_vertices, dist)
+
+        func_Z_lb = lambda u: solve_llb2tsp(model, dist, num_vertices, u)
+        func_Z_ub = lambda : lag_heuristic_2tps(model, num_vertices, dist)
+        func_csg = lambda : compute_subgradient(model)
 
         # Run subgradient method
         results_llb2tps = generic_subgradient(
             model,
             func_Z_lb=func_Z_lb,
             func_Z_ub=func_Z_ub,
-            func_compute_subgradient=func_compute_subgradient,
+            func_compute_subgradient=func_csg,
             func_pi=lambda k: (0.999 ** k) * 2,
             u=[0] * int(num_vertices * (num_vertices - 1)),
             n_iter=100,
