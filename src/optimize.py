@@ -1,12 +1,14 @@
 import sys
 import itertools
+import numpy as np
 
 import pandas as pd
-from tqdm import tqdm
 import gurobipy as gp
 from gurobipy import GRB, tuplelist, quicksum
+from tqdm import tqdm
 
 from read_instance import load_instance, list_avaliable_instances
+from subgradient import generic_subgradient
 
 
 def eliminate_subtour_solution(num_vertices, model, where):
@@ -16,7 +18,6 @@ def eliminate_subtour_solution(num_vertices, model, where):
     """
     # Candidato a solução, segundo exemplo do Gurobi
     if where == GRB.Callback.MIPSOL:
-
         # Validando os caminhos percorridos por cada variavel
         for v in model._edges_variables:
             values = model.cbGetSolution(v)
@@ -53,21 +54,18 @@ def get_smallest_subtour(num_vertices, edges):
     return cycle
 
 
-def get_optimal_tour(model, num_vertices):
+def get_optimal_tour(var_edges, num_vertices):
     """
     Função executada para gerar lista com a sequencia das cidades visitadas
     """
     tours, edges = [], []
-    for var in model._edges_variables:
-        # Obtendo arestas visitadas
-        values = model.getAttr("x", var)
-        selected = gp.tuplelist((i, j) for i, j in values.keys() if values[i, j] > 0.5)
+    for var in var_edges:
+        selected = gp.tuplelist((i, j) for i, j in var.keys() if var[i, j] > 0.5)
         edges.append(list(selected))
 
         # Obtendo caminho percorrido
         tour = get_smallest_subtour(num_vertices, selected)
         tours.append(tour)
-
     # Check if the solution is valid
     check_2tsp_valid_solution(num_vertices, tours, edges)
 
@@ -80,18 +78,35 @@ def check_2tsp_valid_solution(num_vertices, tours, edges):
     """
     # Verifica se todos os vertices foram utilizados
     assert not any([len(tour) != num_vertices for tour in tours])
-        
     # Verifica a dijunção entre os dois ocnjuntos de arestas
     assert not any([edge in edges[1] for edge in edges[0]])
 
 
-def build_2tsp_model(num_vertices, points, dist):
+def try_swap_edges(x, y, num_vertices, edges, u1, v1, u2, v2):
+    # Verifica se as arestas estão disponiveis
+    if x[u1, v2] + x[u2, v1] + y[u1, v2] + y[u2, v1] > 0:
+        return False, None
+    # Realiza a troca das arestas
+    used_edges = x.copy()
+    used_edges[u1, v1] = used_edges[v1, u1] = 0
+    used_edges[u2, v2] = used_edges[v2, u2] = 0
+    used_edges[u1, v2] = used_edges[v2, u1] = 1
+    used_edges[u2, v1] = used_edges[v1, u2] = 1
+
+    # Verifica se a troca é válida
+    selected = gp.tuplelist((i, j) for i, j in edges if used_edges[i, j] > 0.5)
+    valid = len(get_smallest_subtour(num_vertices, selected)) == num_vertices
+
+    return valid, used_edges
+
+
+def build_2tsp_model(num_vertices, dist):
     """
     Build the 2tsp model
     """
     # Create a new model
     model = gp.Model("2tsp")
-    
+
     # Set Params
     model.setParam(gp.GRB.Param.OutputFlag, 0)
     model.setParam(gp.GRB.Param.TimeLimit, 30 * 60)
@@ -103,11 +118,12 @@ def build_2tsp_model(num_vertices, points, dist):
     for i, j in x_edges.keys():
         x_edges[j, i] = x_edges[i, j]  # edge in opposite direction
         y_edges[j, i] = y_edges[i, j]  # edge in opposite direction
-
     # Objective
     model.setObjective(
-        gp.quicksum(x_edges[i, j] * dist[i, j] for i, j in dist.keys())
-        + gp.quicksum(y_edges[i, j] * dist[i, j] for i, j in dist.keys()),
+        gp.quicksum(
+            x_edges[i, j] * dist[i, j] + y_edges[i, j] * dist[i, j]
+            for i, j in dist.keys()
+        ),
         GRB.MINIMIZE,
     )
 
@@ -128,57 +144,160 @@ def build_2tsp_model(num_vertices, points, dist):
     )
 
 
-def main(ins_folder):
+def build_llb2tsp_model(num_vertices, dist):
     """
-    Run 2TSP model in all instances and save an CSV with the results
+    Build the llb2tsp model
     """
-    ins_filenames = list_avaliable_instances(ins_folder)
-    results = pd.DataFrame()
+    # Create a new model
+    model = gp.Model("llb2tsp")
 
-    print("Starting experiments")
-    for filename in tqdm(ins_filenames):
-        # Load instance
-        instance = load_instance(filename)
+    # Set Params
+    model.setParam(gp.GRB.Param.OutputFlag, 0)
+    model.setParam(gp.GRB.Param.TimeLimit, 30 * 60)
+    model.setParam(gp.GRB.Param.Seed, 42)
 
-        # Save cost and time
-        costs, times, optimal_tours, selected_edges = [], [], [], []
+    # Variables
+    x_edges = model.addVars(dist.keys(), vtype=GRB.BINARY, name="x_edges")
+    y_edges = model.addVars(dist.keys(), vtype=GRB.BINARY, name="y_edges")
+    for i, j in x_edges.keys():
+        x_edges[j, i] = x_edges[i, j]  # edge in opposite direction
+        y_edges[j, i] = y_edges[i, j]  # edge in opposite direction
+    # Constraints
+    #   Add degree-2 constraint
+    model.addConstrs(x_edges.sum(i, "*") == 2 for i in range(num_vertices))
+    model.addConstrs(y_edges.sum(i, "*") == 2 for i in range(num_vertices))
 
-        # Building the models
-        for model, callback in [build_2tsp_model(*instance)]:
-            # Optimize model
-            model.optimize(callback)
-            # Saving costs and times
-            costs.append(model.objVal)
-            times.append(model.runtime)
+    model._edges_variables = [x_edges, y_edges]
+    model.Params.lazyConstraints = 1
 
-            # Get optimal tour
-            tours, edges = get_optimal_tour(model, instance[0])
-            optimal_tours.append(tours)
-            selected_edges.append(edges)
-
-        results = results.append(
-            {
-                "n_vertices": instance[0],
-
-                "lim_inf_lag": 0,
-                "lim_sup_lag": 0,
-                "time_lag": round(times[0], 3),
-                "cost_lag": costs[0],
-                "optimal_tour_lag": optimal_tours[0],
-                "edges_lag": selected_edges[0],
-
-                "lim_inf_int": 0,
-                "lim_sup_int": 0,
-                "time_int": round(times[0], 3),
-                "cost_int": costs[0],
-                "optimal_tour_int": optimal_tours[0],
-                "edges_int": selected_edges[0]
-            },
-            ignore_index=True,
+    def func_Z_lb(u):
+        # Set objective
+        model.setObjective(
+            gp.quicksum(
+                x_edges[i, j] * dist[i, j] + y_edges[i, j] * dist[i, j]
+                for i, j in dist.keys()
+            )
+            + gp.quicksum(
+                u[index] * (-1 + (x_edges[i, j] + y_edges[i, j]))
+                for index, (i, j) in enumerate(x_edges.keys())
+            ),
+            GRB.MINIMIZE,
         )
 
-    results.to_csv("data/results.csv", index=False)
+        model.optimize(
+            lambda model, where: eliminate_subtour_solution(num_vertices, model, where)
+        )
 
+        return model.ObjVal
+
+    def func_Z_ub():
+        edges_variables = model._edges_variables
+        x = model.getAttr("X", edges_variables[0])
+        y = model.getAttr("X", edges_variables[1])
+        edges = x_edges.keys()
+
+        for u1, v1 in edges:
+            # Verifica se a restrição foi violada
+            if x[u1, v1] + y[u1, v1] <= 1:
+                continue
+            # Busca outra aresta que pode ser trocada com essa
+            for u2, v2 in edges:
+                # Verifica se tem algum vertice em comum
+                if len(set([u1, v1, u2, v2])) != 4:
+                    continue
+
+                success, used_edges = try_swap_edges(
+                    x, y, num_vertices, edges, u1, v1, u2, v2
+                )
+                if success:
+                    x = used_edges
+                    break
+        get_optimal_tour([x, y], num_vertices)
+        cost = sum(
+            (x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys()
+        )
+        return cost
+
+    def func_compute_subgradient():
+        edges_variables = model._edges_variables
+        x_edges_values = model.getAttr("X", edges_variables[0])
+        y_edges_values = model.getAttr("X", edges_variables[1])
+        return np.array(
+            [
+                -1 + (x_edges_values[i, j] + y_edges_values[i, j])
+                for i, j in x_edges.keys()
+            ]
+        )
+
+    return model, func_Z_lb, func_Z_ub, func_compute_subgradient
+
+
+def main(ins_folder):
+    """
+    Run LLB2TPS and 2TSP model in one instance and save an CSV with the results
+    """
+    # If True, will run the subgradient method for the LLB2TPS
+    run_llb2tps = True
+    # If True, will optimize the 2TSP (with ILP)
+    run_2tps_ilp = True
+    # Choose: {0, 1, 2, 3, 4}
+    instance_id = 2
+
+    # Load instance
+    num_vertices, _, dist = load_instance(f"{ins_folder}/instancia-{instance_id}.json")
+    print(f"Running instance {instance_id} with {num_vertices} vertices")
+
+    # Begin: LLB2TPS
+    if run_llb2tps:
+        # Building the model
+        model, func_Z_lb, func_Z_ub, func_compute_subgradient = build_llb2tsp_model(
+            num_vertices, dist
+        )
+
+        # Run subgradient method
+        results_llb2tps = generic_subgradient(
+            model,
+            func_Z_lb=func_Z_lb,
+            func_Z_ub=func_Z_ub,
+            func_compute_subgradient=func_compute_subgradient,
+            func_pi=lambda k: (0.999 ** k) * 2,
+            u=[0] * int(num_vertices * (num_vertices - 1)),
+            n_iter=100,
+            verbose=True,
+        )
+    else:
+        results_llb2tps = {"Z_lb": 0, "Z_ub": 0, "time": 0}
+    # End: LLB2TPS
+
+    # Begin: 2TPS with ILP
+    if run_2tps_ilp:
+        # Building the model
+        model, callback = build_2tsp_model(num_vertices, dist)
+
+        # Optimaze the model
+        model.optimize(callback)
+
+        results_2tps = {
+            "Z_lb": model.ObjBound,
+            "Z_ub": model.objVal,
+            "time": model.runtime,
+        }
+    else:
+        results_2tps = {"Z_lb": 0, "Z_ub": 0, "time": 0}
+    # End: 2TPS with ILP
+
+    pd.DataFrame(
+        {
+            "n_vertices": num_vertices,
+            "Z_lb_lag": round(results_llb2tps["Z_lb"], 2),
+            "Z_ub__lag": round(results_llb2tps["Z_ub"], 2),
+            "time_lag": round(results_llb2tps["time"], 2),
+            "Z_lb_lip": round(results_2tps["Z_lb"], 2),
+            "Z_ub_lip": round(results_2tps["Z_ub"], 2),
+            "time_lip": round(results_2tps["time"], 2),
+        },
+        index=[0],
+    ).to_csv(f"data/results_{instance_id}.csv", index=False)
 
 
 if __name__ == "__main__":
