@@ -175,6 +175,45 @@ def lag_heuristic_2tps(model, num_vertices, dist):
 
     return cost
 
+def get_neighbors(vertice, num_vertices, excludes):
+    for u in range(num_vertices): # Todos os vizinhos de vertice, exceto
+        if u == vertice or u in excludes: continue
+        yield u
+
+def lag_heuristic_2tps_v2(model, num_vertices, dist):
+    edges_variables = model._edges_variables
+    x = model.getAttr("X", edges_variables[0])
+    y = model.getAttr("X", edges_variables[1])
+    edges = edges_variables[0].keys()
+    
+
+    for u1, v1 in edges:
+        # Verifica se a restrição foi violada
+        if x[u1, v1] + y[u1, v1] <= 1: 
+            continue
+        
+        # A aresta (u1, v1) precisa ser removida da solução
+        solved = False
+        for v2 in get_neighbors(u1, num_vertices, [v1]): # Todos os vizinhos de u1, que não seja v1
+            if solved:
+                break
+            if x[u1, v2] + y[u1, v2] == 0: # Verifica se a aresta não foi utilizada
+                for v3 in get_neighbors(v2, num_vertices, [u1, v1]): # Todos os vizinhos de v2, que não seja v1
+                    if x[v2, v3] == 1 and (x[v3, v1] + y[v3, v1] == 0):
+                        success, used_edges = try_swap_edges(x, y, num_vertices, edges, u1, v1, v3, v2)
+                        if success:
+                            x = used_edges
+                            solved = True
+                            break
+
+    # Sanity check: verifica se a heurística encontrou uma solução valida
+    tours, edges = get_optimal_tour([x, y], num_vertices)
+    check_2tsp_valid_solution(num_vertices, tours, edges)
+
+    # Computa o custo da solução heurística
+    cost = sum((x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys())
+
+    return cost
 
 def solve_llb2tsp(model, dist, num_vertices, u):
     """
@@ -259,7 +298,9 @@ def main(ins_folder):
     # If True, will optimize the 2TSP (with ILP)
     run_2tps_ilp = True
     # Choose: {0, 1, 2, 3, 4}
-    instance_id = 0
+    instance_id = 1
+    # Function that define PI in the iteration k for subgradient method.
+    func_pi = lambda k: (0.999 ** k) * 2
 
     # Load instance
     num_vertices, _, dist = load_instance(f"{ins_folder}/instancia-{instance_id}.json")
@@ -271,7 +312,7 @@ def main(ins_folder):
         model = build_llb2tsp_model(num_vertices, dist)
 
         func_Z_lb = lambda u: solve_llb2tsp(model, dist, num_vertices, u)
-        func_Z_ub = lambda : lag_heuristic_2tps(model, num_vertices, dist)
+        func_Z_ub = lambda : lag_heuristic_2tps_v2(model, num_vertices, dist)
         func_csg = lambda : compute_subgradient(model)
 
         # Run subgradient method
@@ -280,7 +321,7 @@ def main(ins_folder):
             func_Z_lb=func_Z_lb,
             func_Z_ub=func_Z_ub,
             func_compute_subgradient=func_csg,
-            func_pi=lambda k: (0.999 ** k) * 2,
+            func_pi=func_pi,
             u=[0] * int(num_vertices * (num_vertices - 1)),
             n_iter=100,
             verbose=True,
