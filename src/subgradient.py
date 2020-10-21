@@ -60,27 +60,27 @@ def generic_subgradient(
         ):
             print(f"Non-improvement of Z_lb for {early_stop} iterations.")
             break
+
         # Termination criteria (4): optimality
         if np.isclose(Z_lb, Z_ub, atol=atol):
             print("Optimal value found.")
             break
+
         g = func_compute_subgradient()
         # Termination criteria (5): all subgradient is zero
         if all([np.isclose(g_i, 0, atol=atol) for g_i in g]):
             print("Optimal value found.")
             break
+
         Z_ub = min(Z_ub, func_Z_ub())
         pi = func_pi(k - 1)
-        # print(pi)
         alpha = pi * ((Z_ub - Z_lb) / (g ** 2).sum())
 
         u = u + alpha * g
         u[u < 0] = 0
 
         if verbose:
-            print(
-                "iteration:", k, ", Z_lb:", round(Z_lb, 2), ", Z_ub:", Z_ub
-            )  # , ', u:', np.array(u))
+            print("iteration:", k, ", Z_lb:", round(Z_lb, 2), ", Z_ub:", Z_ub)  # , ', u:', np.array(u))
         if time() - start_time >= timeout:
             print("Timedout reached.")
     if k >= n_iter:

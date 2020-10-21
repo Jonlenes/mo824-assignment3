@@ -66,9 +66,6 @@ def get_optimal_tour(var_edges, num_vertices):
         # Obtendo caminho percorrido
         tour = get_smallest_subtour(num_vertices, selected)
         tours.append(tour)
-    # Check if the solution is valid
-    check_2tsp_valid_solution(num_vertices, tours, edges)
-
     return tours, edges
 
 
@@ -171,6 +168,10 @@ def build_llb2tsp_model(num_vertices, dist):
     model.Params.lazyConstraints = 1
 
     def func_Z_lb(u):
+        """
+        Given a vector, u (Lagrange multipliers), solve the LLB2TPS and return the value
+        of the objective function (which will be the lower bound for the for 2TPS)
+        """
         # Set objective
         model.setObjective(
             gp.quicksum(
@@ -191,6 +192,10 @@ def build_llb2tsp_model(num_vertices, dist):
         return model.ObjVal
 
     def func_Z_ub():
+        """
+        Lagrangian heuristic: takes the LLB2TPS solution and transforms it into a valid 2TPS
+        solution by swapping the edges. This will be a upper bound for 2TPS
+        """
         edges_variables = model._edges_variables
         x = model.getAttr("X", edges_variables[0])
         y = model.getAttr("X", edges_variables[1])
@@ -205,20 +210,26 @@ def build_llb2tsp_model(num_vertices, dist):
                 # Verifica se tem algum vertice em comum
                 if len(set([u1, v1, u2, v2])) != 4:
                     continue
-
-                success, used_edges = try_swap_edges(
-                    x, y, num_vertices, edges, u1, v1, u2, v2
-                )
+                # Tenta fazer a troca de aresta, verificando se nenhum subciclo foi gerado
+                success, used_edges = try_swap_edges(x, y, num_vertices, edges, u1, v1, u2, v2)
                 if success:
                     x = used_edges
                     break
-        get_optimal_tour([x, y], num_vertices)
-        cost = sum(
-            (x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys()
-        )
+        
+        # Sanity check: verifica se a heurística encontrou uma solução valida
+        tours, edges = get_optimal_tour([x, y], num_vertices)
+        check_2tsp_valid_solution(num_vertices, tours, edges)
+
+        # Computa o custo da solução heurística
+        cost = sum((x[i, j] * dist[i, j] + y[i, j] * dist[i, j]) for i, j in dist.keys())
+
         return cost
 
     def func_compute_subgradient():
+        """
+        Computes the subgradients considering the current solution provided by LLB2TPS. 
+        This is done using the dualized constraint as follows: b - Ax.
+        """
         edges_variables = model._edges_variables
         x_edges_values = model.getAttr("X", edges_variables[0])
         y_edges_values = model.getAttr("X", edges_variables[1])
@@ -286,6 +297,7 @@ def main(ins_folder):
         results_2tps = {"Z_lb": 0, "Z_ub": 0, "time": 0}
     # End: 2TPS with ILP
 
+    # Save csv with the results
     pd.DataFrame(
         {
             "n_vertices": num_vertices,
