@@ -115,6 +115,7 @@ def build_2tsp_model(num_vertices, dist):
     for i, j in x_edges.keys():
         x_edges[j, i] = x_edges[i, j]  # edge in opposite direction
         y_edges[j, i] = y_edges[i, j]  # edge in opposite direction
+
     # Objective
     model.setObjective(
         gp.quicksum(
@@ -129,8 +130,9 @@ def build_2tsp_model(num_vertices, dist):
     model.addConstrs(x_edges.sum(i, "*") == 2 for i in range(num_vertices))
     model.addConstrs(y_edges.sum(i, "*") == 2 for i in range(num_vertices))
 
+    # Disjunção de arestas
     model.addConstrs(
-        gp.quicksum([x_edges[i, j], y_edges[i, j]]) <= 1 for i, j in x_edges.keys()
+        x_edges[i, j] + y_edges[i, j] <= 1 for i, j in x_edges.keys()
     )
 
     model._edges_variables = [x_edges, y_edges]
@@ -191,7 +193,7 @@ def lag_heuristic_2tps_v2(model, num_vertices, dist):
         # Verifica se a restrição foi violada
         if x[u1, v1] + y[u1, v1] <= 1: 
             continue
-        
+
         # A aresta (u1, v1) precisa ser removida da solução
         solved = False
         for v2 in get_neighbors(u1, num_vertices, [v1]): # Todos os vizinhos de u1, que não seja v1
@@ -300,7 +302,7 @@ def main(ins_folder):
     # Choose: {0, 1, 2, 3, 4}
     instance_id = 1
     # Function that define PI in the iteration k for subgradient method.
-    func_pi = lambda k: (0.999 ** k) * 2
+    func_pi = lambda k: 1 # (0.999 ** k) * 2
 
     # Load instance
     num_vertices, _, dist = load_instance(f"{ins_folder}/instancia-{instance_id}.json")
@@ -323,8 +325,11 @@ def main(ins_folder):
             func_compute_subgradient=func_csg,
             func_pi=func_pi,
             u=[0] * int(num_vertices * (num_vertices - 1)),
-            n_iter=100,
+            n_iter=100000,
+            early_stop=5,
+            atol=1e-08,
             verbose=True,
+            timeout=30*60
         )
     else:
         results_llb2tps = {"Z_lb": 0, "Z_ub": 0, "time": 0}

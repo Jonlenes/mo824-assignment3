@@ -71,7 +71,6 @@ def generic_subgradient(
         if all([np.isclose(g_i, 0, atol=atol) for g_i in g]):
             print("Optimal value found.")
             break
-
         Z_ub = min(Z_ub, func_Z_ub())
         pi = func_pi(k - 1)
         alpha = pi * ((Z_ub - Z_lb) / (g ** 2).sum())
@@ -80,9 +79,10 @@ def generic_subgradient(
         u[u < 0] = 0
 
         if verbose:
-            print("iteration:", k, ", Z_lb:", round(Z_lb, 2), ", Z_ub:", Z_ub)  # , ', u:', np.array(u))
+            print("iteration:", k, ", Z_lb:", round(Z_lb, 5), ", Z_ub:", round(Z_ub, 5), ", pi:", round(pi, 5), ", alpha:", round(alpha, 5))
         if time() - start_time >= timeout:
             print("Timedout reached.")
+            break
     if k >= n_iter:
         print("Maximum number of iterations reached.")
     return {"Z_lb": max(Z_lb_history), "Z_ub": Z_ub, "time": time() - start_time}
