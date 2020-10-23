@@ -97,7 +97,7 @@ def try_swap_edges(x, y, num_vertices, edges, u1, v1, u2, v2):
     return valid, used_edges
 
 
-def build_2tsp_model(num_vertices, dist):
+def build_2tsp_model(num_vertices, dist, timeout):
     """
     Build the 2tsp model
     """
@@ -106,7 +106,7 @@ def build_2tsp_model(num_vertices, dist):
 
     # Set Params
     model.setParam(gp.GRB.Param.OutputFlag, 0)
-    model.setParam(gp.GRB.Param.TimeLimit, 30 * 60)
+    model.setParam(gp.GRB.Param.TimeLimit, timeout)
     model.setParam(gp.GRB.Param.Seed, 42)
 
     # Variables
@@ -261,7 +261,7 @@ def compute_subgradient(model):
     )
 
 
-def build_llb2tsp_model(num_vertices, dist):
+def build_llb2tsp_model(num_vertices, dist, timeout):
     """
     Build the llb2tsp model
     """
@@ -270,7 +270,7 @@ def build_llb2tsp_model(num_vertices, dist):
 
     # Set Params
     model.setParam(gp.GRB.Param.OutputFlag, 0)
-    model.setParam(gp.GRB.Param.TimeLimit, 30 * 60)
+    model.setParam(gp.GRB.Param.TimeLimit, timeout)
     model.setParam(gp.GRB.Param.Seed, 42)
 
     # Variables
@@ -300,9 +300,11 @@ def main(ins_folder):
     # If True, will optimize the 2TSP (with ILP)
     run_2tps_ilp = True
     # Choose: {0, 1, 2, 3, 4}
-    instance_id = 1
+    instance_id = 3
     # Function that define PI in the iteration k for subgradient method.
     func_pi = lambda k: 1 # (0.999 ** k) * 2
+    # Max waiting time
+    timeout = 30*60
 
     # Load instance
     num_vertices, _, dist = load_instance(f"{ins_folder}/instancia-{instance_id}.json")
@@ -310,8 +312,9 @@ def main(ins_folder):
 
     # Begin: LLB2TPS
     if run_llb2tps:
+        print('###### Running LLB2TPS ######')
         # Building the model
-        model = build_llb2tsp_model(num_vertices, dist)
+        model = build_llb2tsp_model(num_vertices, dist, timeout)
 
         func_Z_lb = lambda u: solve_llb2tsp(model, dist, num_vertices, u)
         func_Z_ub = lambda : lag_heuristic_2tps_v2(model, num_vertices, dist)
@@ -329,7 +332,7 @@ def main(ins_folder):
             early_stop=5,
             atol=1e-08,
             verbose=True,
-            timeout=30*60
+            timeout=timeout
         )
     else:
         results_llb2tps = {"Z_lb": 0, "Z_ub": 0, "time": 0}
@@ -337,8 +340,9 @@ def main(ins_folder):
 
     # Begin: 2TPS with ILP
     if run_2tps_ilp:
+        print('###### Running LLB2TPS ######')
         # Building the model
-        model, callback = build_2tsp_model(num_vertices, dist)
+        model, callback = build_2tsp_model(num_vertices, dist, timeout)
 
         # Optimaze the model
         model.optimize(callback)

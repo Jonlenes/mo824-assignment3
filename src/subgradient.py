@@ -1,5 +1,6 @@
 import numpy as np
 from time import time
+from func_timeout import func_timeout, FunctionTimedOut
 
 np.set_printoptions(precision=2, suppress=True)
 
@@ -47,7 +48,14 @@ def generic_subgradient(
 
     # Termination criteria (1): number of iterations
     for k in range(1, n_iter + 1):
-        Z_lb = func_Z_lb(u)
+        try:
+            
+            Z_lb = func_timeout(timeout-(time()-start_time), func_Z_lb, args=(u,))
+        except FunctionTimedOut:
+            Z_lb_history.append(0)
+            print("Timedout reached.")
+            break
+
         Z_lb_history.append(Z_lb)
 
         # Termination criteria (3): Non-improvement of Z_lb
@@ -71,7 +79,15 @@ def generic_subgradient(
         if all([np.isclose(g_i, 0, atol=atol) for g_i in g]):
             print("Optimal value found.")
             break
-        Z_ub = min(Z_ub, func_Z_ub())
+
+        try:
+            Z_ub_k = func_timeout(timeout-(time()-start_time), func_Z_ub)
+        except FunctionTimedOut:
+            Z_ub = min(Z_ub, np.inf)
+            print("Timedout reached.")
+            break
+
+        Z_ub = min(Z_ub, Z_ub_k)
         pi = func_pi(k - 1)
         alpha = pi * ((Z_ub - Z_lb) / (g ** 2).sum())
 
